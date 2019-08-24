@@ -1,5 +1,7 @@
 package space.crab8012.cardgameserver;
 
+import space.crab8012.cardgameplayer.gameobjects.ServerCommand;
+
 import java.io.*;
 import java.net.Socket;
 import java.util.concurrent.SynchronousQueue;
@@ -29,6 +31,9 @@ public class ClientHandler extends Thread {
     @Override
     public void run(){
         try {
+            ServerCommand c = (ServerCommand)queue.take();
+
+
             queue.put(ois.readObject()); //Reads from client the Player Object
             oos.writeObject(queue.take());//Sends to client the GameState Object
         } catch (InterruptedException e) {

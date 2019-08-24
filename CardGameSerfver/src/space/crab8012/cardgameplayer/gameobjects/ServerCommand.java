@@ -30,4 +30,8 @@ public class ServerCommand implements Serializable {
     public ArrayList<Object> getPayload() {
         return payload;
     }
+
+    public void setCommand(String command){
+        this.command = command;
+    }
 }
