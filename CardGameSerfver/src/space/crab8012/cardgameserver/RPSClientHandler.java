@@ -1,21 +1,36 @@
 package space.crab8012.cardgameserver;
 
+import space.crab8012.cardgameplayer.gameobjects.Enums;
 import space.crab8012.cardgameplayer.gameobjects.ServerCommand;
+import space.crab8012.cardgameplayer.payloads.GameWinnerPayload;
+import space.crab8012.cardgameplayer.payloads.Payload;
+import space.crab8012.cardgameplayer.payloads.PlayerMovePayload;
+import space.crab8012.cardgameplayer.payloads.PlayerObjectPayload;
 
 import java.io.*;
 import java.net.Socket;
-import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 public class RPSClientHandler extends Thread {
-    final DataInputStream dis;
-    final DataOutputStream dos;
-    final Socket s;
-    ObjectInputStream ois;
-    ObjectOutputStream oos;
+    private final DataInputStream dis;
+    private final DataOutputStream dos;
+    private final Socket s;
+    private ObjectInputStream ois;
+    private ObjectOutputStream oos;
 
-    SynchronousQueue queue;
+    //The expected Payloads
+    private GameWinnerPayload gameWinnerPayload = null;
+    private PlayerMovePayload playerMovePayload = null;
+    private PlayerObjectPayload playerObjectPayload = null;
 
-    public RPSClientHandler(Socket s,DataInputStream dis, DataOutputStream dos, SynchronousQueue queue){
+    //The commands to send
+    private ServerCommand getPlayerCommand = new ServerCommand(Enums.COMMANDS.GETPLAYER.name());
+    private ServerCommand getMoveCommand = new ServerCommand(Enums.COMMANDS.GETMOVE.name());
+    private ServerCommand sendWinnerCommand = new ServerCommand(Enums.COMMANDS.SENDWINNER.name());
+
+    ConcurrentLinkedQueue<ServerCommand> queue;
+
+    public RPSClientHandler(Socket s, DataInputStream dis, DataOutputStream dos, ConcurrentLinkedQueue<ServerCommand> queue){
         this.queue = queue;
         this.dis = dis;
         this.dos = dos;
@@ -31,18 +46,50 @@ public class RPSClientHandler extends Thread {
     @Override
     public void run(){
         try {
-            ServerCommand c = (ServerCommand)queue.take(); //Send GETPLAYER command
-            queue.put(ois.readObject()); //Read the player name.
-            oos.writeObject(queue.take());//Tries to get a move from the client
-            queue.put(ois.readObject()); //Sends the client's move to the server.
-            oos.writeObject(queue.take());//Tries to send the client the winning player.
-        } catch (InterruptedException e) {
-            e.printStackTrace();
-        } catch (IOException e) {
-            e.printStackTrace();
-        } catch (ClassNotFoundException e) {
+            //Sending SendPlayer Command
+            oos.writeObject(getPlayerCommand);
+            while(playerObjectPayload == null){
+                Payload tempPayload = ((ServerCommand)ois.readObject()).getPayload();
+                if(tempPayload != null) {
+                    if (tempPayload instanceof PlayerObjectPayload) {
+                        playerObjectPayload = (PlayerObjectPayload) tempPayload;
+                        System.out.println("Gotten Player Object");
+                    } else {
+                        oos.writeObject(getPlayerCommand);
+                    }
+                }
+            }
+
+            //Sending GetPlayerMove command
+            oos.writeObject(getMoveCommand);
+            while(playerMovePayload == null){
+                Payload tempPayload = ((ServerCommand)ois.readObject()).getPayload();
+                if(tempPayload != null) {
+                    if (tempPayload instanceof PlayerMovePayload) {
+                        playerMovePayload = (PlayerMovePayload) tempPayload;
+                        System.out.println("Gotten Player Move");
+                    } else {
+                        oos.writeObject(getMoveCommand);
+                    }
+                }
+            }
+
+            System.out.println("Waiting for Game Winner");
+            waitForGameWinner();
+
+            System.out.println("Sending Game Winner");
+            sendWinnerCommand.setCommand(Enums.COMMANDS.SENDWINNER.name());
+            sendWinnerCommand.setPayload(gameWinnerPayload);
+            oos.writeObject(new ServerCommand(Enums.COMMANDS.SENDWINNER.name(), gameWinnerPayload));
+
+            ServerCommand quitCommand = new ServerCommand(Enums.COMMANDS.QUIT.name());
+            oos.writeObject(quitCommand);
+
+
+        } catch (Exception e) {
             e.printStackTrace();
         }
+
         try{
             ois.close();
             oos.close();
@@ -54,7 +101,28 @@ public class RPSClientHandler extends Thread {
         }
     }
 
-    public void sendFirstPlayer(){
-        System.out.println("SENDFIRSTPLAYER TO " + s);
+    private void waitForGameWinner(){
+        while(gameWinnerPayload == null){
+            try {
+                Thread.sleep(500);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+        if(gameWinnerPayload == null) {
+            waitForGameWinner();
+        }
+    }
+
+    public void sendWinner(GameWinnerPayload payload){
+        this.gameWinnerPayload = payload;
+    }
+
+    public PlayerObjectPayload getPlayerObject(){
+        return this.playerObjectPayload;
+    }
+
+    public PlayerMovePayload getPlayerMovePayload(){
+        return this.playerMovePayload;
     }
 }

@@ -1,15 +1,17 @@
 package space.crab8012.cardgameserver;
 
-import space.crab8012.cardgameplayer.gameobjects.GameMode;
-import space.crab8012.cardgameplayer.gameobjects.GameState;
-import space.crab8012.cardgameplayer.gameobjects.Player;
-import space.crab8012.cardgameplayer.gameobjects.ServerCommand;
+import com.sun.security.ntlm.Server;
+import space.crab8012.cardgameplayer.gameobjects.*;
+import space.crab8012.cardgameplayer.payloads.GameWinnerPayload;
+import space.crab8012.cardgameplayer.payloads.PlayerMovePayload;
+import space.crab8012.cardgameplayer.payloads.PlayerObjectPayload;
 
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.ArrayList;
 import java.util.Scanner;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.SynchronousQueue;
 
 public class Main {
@@ -19,41 +21,23 @@ public class Main {
     static Scanner commandProcessor;
 
     static ServerSocket ss;
-    public static SynchronousQueue queue;
+    public static ConcurrentLinkedQueue<ServerCommand> queue;
 
-    public static ArrayList<Thread> threads;
+    public static ArrayList<RPSClientHandler> clients;
 
-    public static ArrayList<ServerCommand> playerMoves = new ArrayList();
-
-    /*
-     * An ENUM that mirrors an enum to be added to the client.
-     * It is intended to evolve as the client-server pair evolve.
-     */
-    // GETPLAYER - Request to get a player object.
-    // SENDPLAYER - Response to a GETPLAYER request. Generally a Player object.
-    // UPDATEGAMESTATE - Response-less command. Sent from Server to Client. Contains GameState.
-    // GETMOVE - Tell the client to send over the player's move.
-    // SENDMOVE - Send the server the player's move.
-    // SENDWINNER - Send the client the winning player.
-
-    enum COMMANDS {
-        GETPLAYER, UPDATEGAMESTATE, SENDPLAYER, GETMOVE, SENDWINNER, QUIT
-    }
-    enum RPSMOVES {
-        ROCK, PAPER, SCISSORS
-    }
+    public static ArrayList<PlayerMovePayload> playerMoves = new ArrayList();
 
     public static void main(String[] args) throws IOException {
-
+        rpsServer();
     }
 
     public static void rpsServer() throws IOException{
         System.out.println("Starting Game Server");
         System.out.println("Creating Queue");
-        queue = new SynchronousQueue(true);
+        queue = new ConcurrentLinkedQueue<ServerCommand>();
         System.out.println("Queue Created");
 
-        threads = new ArrayList();
+        clients = new ArrayList();
 
         System.out.println("Creating Game");
         gs = new GameState();
@@ -65,72 +49,70 @@ public class Main {
 
         Socket s = null;
         ss = new ServerSocket(8888);
-        while(gs.getNumConnectedPlayers() < gs.getMaxGameSize()) {
+        while(clients.size() < gs.getMaxGameSize()) {
             try {
                 s = ss.accept();
                 DataInputStream dis = new DataInputStream(s.getInputStream());
                 DataOutputStream dos = new DataOutputStream(s.getOutputStream());
                 //Create new thread object
-                System.out.println("Client" + s + "Connected");
-                Thread t = new ClientHandler(s, dis, dos, queue);
-                t.start(); //Start the thread
-                ServerCommand getPlayerCommand = new ServerCommand(COMMANDS.GETPLAYER.name(), null);
-                queue.put(getPlayerCommand);
-                gs.addPlayer((Player) queue.take()); // Add the player sent from the client to the gamestate.
+                System.out.println("Client" + s.getInetAddress().getAddress().toString() + "Connected");
+                RPSClientHandler t = new RPSClientHandler(s, dis, dos, queue);
 
-                threads.add(t);
+                t.start(); //Start the thread
+                System.out.println("Thread Started");
+                clients.add(t);
             } catch (Exception e) {
-                s.close();
+                if(s != null){
+                    s.close();
+                }
                 e.printStackTrace();
             }
         }
 
-        for (Player player : gs.getPlayers()) {
-            System.out.println("----PLAYER RECIEVED----");
-            System.out.println("NAME: " + player.getName());
-            System.out.println("ICON: " + player.getIcon());
-            System.out.println("SCORE: " + player.getScore());
-            System.out.println("-----------------------");
-            System.out.println("WAITING FOR PLAYER MOVE");
-            try {
-                ServerCommand getPlayerMoveCommand = new ServerCommand(COMMANDS.GETMOVE.name(), null);
-                queue.put(getPlayerMoveCommand); // Send the Move Player command to the client
-                //Wait for player move
-                playerMoves.add((ServerCommand)queue.take());
-            }catch(Exception e){
-                System.out.println(e);
-            }
+        try {
+            Thread.sleep(1000);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
         }
 
-        ServerCommand winnerCommand = null;
-        for(ServerCommand command : playerMoves){
-            if(winnerCommand == null){
-                winnerCommand = command;
+        for (RPSClientHandler c : clients) {
+            PlayerMovePayload p = c.getPlayerMovePayload();
+
+            System.out.println("----PLAYER RECIEVED----");
+            System.out.println("NAME: " + p.getPlayer().getName());
+            System.out.println("ICON: " + p.getPlayer().getIcon());
+            System.out.println("SCORE: " + p.getPlayer().getScore());
+            System.out.println("-----------------------");
+
+            playerMoves.add(p);
+        }
+
+        PlayerMovePayload winner = null;
+        for(PlayerMovePayload payload : playerMoves){
+            if(winner == null){
+                winner = payload;
             }else{
                 //Command Payload: {Player Object, Player Move}
-                RPSMOVES newPlayerMove = (RPSMOVES)command.getPayload().get(1);
-                RPSMOVES winnerPlayerMove = (RPSMOVES)command.getPayload().get(1);
-                if((newPlayerMove == RPSMOVES.PAPER && winnerPlayerMove == RPSMOVES.ROCK) || (newPlayerMove == RPSMOVES.ROCK && winnerPlayerMove == RPSMOVES.SCISSORS) || (newPlayerMove == RPSMOVES.SCISSORS && winnerPlayerMove == RPSMOVES.PAPER)){
-                    winnerCommand = command;
+                Enums.RPSMOVES newPlayerMove = payload.getMove();
+                Enums.RPSMOVES winnerPlayerMove = winner.getMove();
+                if((newPlayerMove == Enums.RPSMOVES.PAPER && winnerPlayerMove == Enums.RPSMOVES.ROCK) || (newPlayerMove == Enums.RPSMOVES.ROCK && winnerPlayerMove == Enums.RPSMOVES.SCISSORS) || (newPlayerMove == Enums.RPSMOVES.SCISSORS && winnerPlayerMove == Enums.RPSMOVES.PAPER)){
+                    winner = payload;
                 }
             }
         }
-        //Modify the existing server command to maybe save on memory.
-        winnerCommand.setCommand(COMMANDS.SENDWINNER.name());
-        //Send modified command to all players.
-        for (Thread t : threads) {
-            try {
-                queue.put(winnerCommand);
-            }catch(Exception e){
-                System.out.println(e);
-            }
+
+        GameWinnerPayload winnerPayload = new GameWinnerPayload(winner.getPlayer(), winner.getMove());
+
+        for (RPSClientHandler t : clients) {
+            t.sendWinner(winnerPayload);
         }
 
-        System.out.println("\n\n----SERVER CLOSED----");
+        System.out.println("\n\n----GAME OVER----");
 
         //gameLoop();
     }
 
+    /*
     public static void cardgameserver() throws IOException{
         System.out.println("Starting Game Server");
         System.out.println("Creating Queue");
@@ -160,11 +142,11 @@ public class Main {
                 t.start(); //Start the thread
                 ServerCommand getPlayerCommand = new ServerCommand(COMMANDS.GETPLAYER.name(), null);
                 queue.put(getPlayerCommand);
-                gs.addPlayer((Player) queue.take()); // Add the player sent from the client to the gamestate.
+                //gs.addPlayer((Player) queue.take()); // Add the player sent from the client to the gamestate.
                 ArrayList<Object> payload = new ArrayList();
                 payload.add(gs);
                 ServerCommand updateGameStateCommand = new ServerCommand(COMMANDS.UPDATEGAMESTATE.name(), payload);
-                queue.put(gs); // Send the updated gamestate to the client
+                //queue.put(gs); // Send the updated gamestate to the client
                 threads.add(t);
             } catch (Exception e) {
                 s.close();
@@ -243,4 +225,5 @@ public class Main {
             e.printStackTrace();
         }
     }
+    */
 }
